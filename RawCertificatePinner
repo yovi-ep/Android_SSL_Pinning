@@ -1,0 +1,80 @@
+import android.content.Context
+import androidx.annotation.RawRes
+import okhttp3.OkHttpClient
+import java.security.KeyStore
+import java.security.KeyStoreException
+import java.security.NoSuchAlgorithmException
+import java.util.*
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
+
+object RawCertificatePinner {
+    private const val CERTIFICATE_TYPE = "BKS"
+    private const val DEFAULT_TLS_VERSION = "TLSv1.2"
+
+    fun execute(
+        context: Context,
+        @RawRes certificate: Int,
+        password: String,
+        builder: OkHttpClient.Builder
+    ) {
+        try {
+            getTrustedCertificate(context, certificate, password)?.apply {
+                val factory = getTrustManagerFactory(this)
+                val ssl = getSSLContext(factory)
+                val manager = getX509TrustManager(factory)
+
+                builder.sslSocketFactory(ssl.socketFactory, manager)
+                builder.hostnameVerifier { _,_ -> true}
+            } ?: run {
+                throw KeyStoreException("Open keystore failed")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun getTrustedCertificate(
+        context: Context,
+        @RawRes certificate: Int,
+        password: String
+    ) = KeyStore.getInstance(CERTIFICATE_TYPE)?.apply {
+        val inStream = context.resources.openRawResource(certificate)
+
+        try {
+            load(inStream, password.toCharArray())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            try { inStream.close() } catch (e: Exception) {}
+        }
+    } ?: run { null }
+
+    private fun getTrustManagerFactory(
+        trustedCertificate: KeyStore
+    ) = TrustManagerFactory.getInstance(
+        TrustManagerFactory.getDefaultAlgorithm()
+    ).apply {
+        init(trustedCertificate)
+    }
+
+    private fun getSSLContext(
+        factory: TrustManagerFactory
+    ) = SSLContext.getInstance(DEFAULT_TLS_VERSION).apply {
+        init(null, factory.trustManagers, null)
+    } ?: run { throw NoSuchAlgorithmException("Protocol invalid") }
+
+    private fun getX509TrustManager(
+        factory: TrustManagerFactory
+    ): X509TrustManager {
+        val trustManagers = factory.trustManagers
+
+        check(!(trustManagers == null || trustManagers.size != 1 || trustManagers[0] !is X509TrustManager)) {
+            "Wrong trust manager: " + Arrays.toString(trustManagers)
+        }
+
+        return trustManagers[0] as X509TrustManager
+    }
+
+}
